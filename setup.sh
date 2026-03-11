@@ -145,7 +145,7 @@ load_config() {
   CONFIGURE_PROXY="${CONFIGURE_PROXY:-1}"
   CHANGE_DEFAULT_SHELL_TO_ZSH="${CHANGE_DEFAULT_SHELL_TO_ZSH:-1}"
 
-  BASE_PACKAGES_DEFAULT="curl wget git sudo ca-certificates build-essential zsh tmux unzip zip xz-utils gnupg lsb-release software-properties-common jq ripgrep fd-find"
+  BASE_PACKAGES_DEFAULT="curl wget git sudo ca-certificates build-essential zsh tmux unzip zip xz-utils gnupg lsb-release jq ripgrep fd-find"
   BASE_PACKAGES="${BASE_PACKAGES:-$BASE_PACKAGES_DEFAULT}"
 
   PROXY_URL="${PROXY_URL:-}"
@@ -334,6 +334,21 @@ clear_proxy_config() {
   fi
 }
 
+resolve_available_packages() {
+  local available=()
+  local pkg
+
+  for pkg in "$@"; do
+    if apt-cache show "$pkg" >/dev/null 2>&1; then
+      available+=("$pkg")
+    else
+      warn "Skipping unavailable package: $pkg"
+    fi
+  done
+
+  printf '%s\n' "${available[@]}"
+}
+
 install_base_packages() {
   [[ "$INSTALL_BASE_PACKAGES" -eq 1 ]] || {
     log "INSTALL_BASE_PACKAGES=0, skipping base package installation"
@@ -342,10 +357,17 @@ install_base_packages() {
 
   need_root_or_sudo
   need_cmd apt-get
+  need_cmd apt-cache
 
   log "Installing base packages"
   as_root env DEBIAN_FRONTEND=noninteractive apt-get update
-  as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y "${BASE_PACKAGE_ARRAY[@]}"
+
+  mapfile -t available_packages < <(resolve_available_packages "${BASE_PACKAGE_ARRAY[@]}")
+  if [[ "${#available_packages[@]}" -eq 0 ]]; then
+    die "No installable base packages were found in the current apt sources"
+  fi
+
+  as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y "${available_packages[@]}"
 }
 
 install_nodejs() {
@@ -525,6 +547,7 @@ main() {
 }
 
 main "$@"
+
 
 
 
