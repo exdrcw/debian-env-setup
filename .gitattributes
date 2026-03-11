@@ -1,0 +1,9 @@
+* text=auto
+*.sh text eol=lf
+*.env text eol=lf
+*.example text eol=lf
+*.md text eol=lf
+*.conf text eol=lf
+*.local text eol=lf
+*.zshrc text eol=lf
+*.gitignore text eol=lf

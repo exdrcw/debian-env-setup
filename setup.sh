@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Minimal Debian installs may not expose admin commands like usermod in a normal user's PATH.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/config/setup.env"
 ACTION="init"
@@ -522,5 +525,6 @@ main() {
 }
 
 main "$@"
+
 
 
