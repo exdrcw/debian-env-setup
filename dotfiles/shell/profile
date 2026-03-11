@@ -1,0 +1,11 @@
+# ~/.profile
+
+if [ -f "$HOME/.config/dev-bootstrap/proxy.env" ]; then
+  . "$HOME/.config/dev-bootstrap/proxy.env"
+fi
+
+if [ -d "$HOME/.local/bin" ]; then
+  PATH="$HOME/.local/bin:$PATH"
+fi
+
+export PATH

@@ -1,0 +1,25 @@
+[user]
+    name = Your Name
+    email = your.email@example.com
+
+[core]
+    autocrlf = input
+    editor = vim
+
+[init]
+    defaultBranch = main
+
+[pull]
+    ff = only
+
+[fetch]
+    prune = true
+
+[color]
+    ui = auto
+
+[push]
+    autoSetupRemote = true
+
+[include]
+    path = ~/.gitconfig.local
