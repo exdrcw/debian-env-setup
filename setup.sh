@@ -17,7 +17,6 @@ Usage:
 Actions:
   init
   install-base
-  install-node
   install-shell
   link-dotfiles
   apply-proxy
@@ -140,7 +139,6 @@ load_config() {
   GRANT_SUDO="${GRANT_SUDO:-0}"
   SUDO_NOPASSWD="${SUDO_NOPASSWD:-0}"
   INSTALL_BASE_PACKAGES="${INSTALL_BASE_PACKAGES:-1}"
-  INSTALL_NODEJS="${INSTALL_NODEJS:-1}"
   INSTALL_SHELL_TOOLS="${INSTALL_SHELL_TOOLS:-1}"
   CONFIGURE_PROXY="${CONFIGURE_PROXY:-1}"
   CHANGE_DEFAULT_SHELL_TO_ZSH="${CHANGE_DEFAULT_SHELL_TO_ZSH:-1}"
@@ -370,19 +368,6 @@ install_base_packages() {
   as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y "${available_packages[@]}"
 }
 
-install_nodejs() {
-  [[ "$INSTALL_NODEJS" -eq 1 ]] || {
-    log "INSTALL_NODEJS=0, skipping Node.js installation"
-    return 0
-  }
-
-  need_root_or_sudo
-  need_cmd apt-get
-
-  log "Installing nodejs and npm from Debian repositories"
-  as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm
-}
-
 backup_if_needed() {
   local dest="$1"
   local src="$2"
@@ -474,7 +459,6 @@ TARGET_GROUP=$TARGET_GROUP
 GRANT_SUDO=$GRANT_SUDO
 SUDO_NOPASSWD=$SUDO_NOPASSWD
 INSTALL_BASE_PACKAGES=$INSTALL_BASE_PACKAGES
-INSTALL_NODEJS=$INSTALL_NODEJS
 INSTALL_SHELL_TOOLS=$INSTALL_SHELL_TOOLS
 CONFIGURE_PROXY=$CONFIGURE_PROXY
 CHANGE_DEFAULT_SHELL_TO_ZSH=$CHANGE_DEFAULT_SHELL_TO_ZSH
@@ -498,7 +482,6 @@ run_init() {
   grant_sudo_access
   apply_proxy_config
   install_base_packages
-  install_nodejs
   install_shell_tools
 
   if command -v git >/dev/null 2>&1 || command -v npm >/dev/null 2>&1; then
@@ -520,9 +503,6 @@ main() {
       ;;
     install-base)
       install_base_packages
-      ;;
-    install-node)
-      install_nodejs
       ;;
     install-shell)
       install_shell_tools
@@ -547,7 +527,3 @@ main() {
 }
 
 main "$@"
-
-
-
-

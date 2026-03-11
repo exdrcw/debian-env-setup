@@ -24,9 +24,49 @@
 `-- setup.sh
 ```
 
-## 推荐使用方式
+## 全新 Debian 的推荐顺序
 
-### 1. 准备本地配置
+### 1. 先临时配置 apt 代理
+
+如果你的网络不能直接访问 Debian 软件源，先用 root 写一个临时 apt 代理：
+
+```bash
+su -
+cat >/etc/apt/apt.conf.d/80proxy <<'EOF'
+Acquire::http::Proxy "http://127.0.0.1:7890";
+Acquire::https::Proxy "http://127.0.0.1:7890";
+EOF
+apt update
+apt install -y git ca-certificates curl
+```
+
+把 `127.0.0.1:7890` 改成你实际可用的 HTTP 代理。
+
+### 2. 配置 git 代理
+
+为了能 `git clone` 这个仓库，先给当前用户配置 git 代理：
+
+```bash
+git config --global http.proxy http://127.0.0.1:7890
+git config --global https.proxy http://127.0.0.1:7890
+git config --global url."https://".insteadOf git://
+```
+
+验证：
+
+```bash
+git config --global --get http.proxy
+git ls-remote https://github.com/ohmyzsh/ohmyzsh.git HEAD
+```
+
+### 3. clone 这个仓库
+
+```bash
+git clone <your-repo-url> ~/debian-env-setup
+cd ~/debian-env-setup
+```
+
+### 4. 准备本地配置
 
 先复制一份本地配置：
 
@@ -44,7 +84,24 @@ cp config/setup.env.example config/setup.env
 - 是否给用户开 sudo
 - 是否把默认 shell 改成 zsh
 
-### 2. 首次安装
+### 5. 手动安装你自己的 Node.js / npm
+
+这个仓库现在不负责安装 `nodejs` 和 `npm`，由你自己决定安装方式，比如：
+
+- Debian 官方 `apt`
+- `nvm`
+- `fnm`
+- Node 官方 tarball
+
+如果你之后安装好了 `npm`，可以再运行一次：
+
+```bash
+bash setup.sh apply-proxy --config config/setup.env
+```
+
+这样脚本会把 npm 代理和 registry 也配置上。
+
+### 6. 首次执行 setup
 
 如果当前用户还没有 sudo，先切 root 执行：
 
@@ -58,16 +115,16 @@ bash setup.sh init --config config/setup.env
 
 ```bash
 cd /path/to/debian-env-setup
-bash setup.sh init --config config/setup.env
+sudo bash setup.sh init --config config/setup.env
 ```
 
-### 3. 后续只改代理
+### 7. 后续只改代理
 
 ```bash
 bash setup.sh apply-proxy --config config/setup.env
 ```
 
-### 4. 清理代理
+### 8. 清理代理
 
 ```bash
 bash setup.sh clear-proxy --config config/setup.env
@@ -81,12 +138,11 @@ bash setup.sh clear-proxy --config config/setup.env
 2. 写入 apt 代理配置
 3. 写入 shell 代理环境文件
 4. 配置 git 的 HTTP(S) 代理
-5. 配置 npm 的代理与 registry
+5. 如果系统里已经安装了 npm，则配置 npm 的代理与 registry
 6. 安装基础开发包
-7. 安装 `nodejs` 与 `npm`
-8. 安装 `Oh My Zsh` 与 `Oh My Tmux`
-9. 链接 dotfiles
-10. 可选地把默认 shell 切到 zsh
+7. 安装 `Oh My Zsh` 与 `Oh My Tmux`
+8. 链接 dotfiles
+9. 可选地把默认 shell 切到 zsh
 
 ## 已覆盖的代理配置
 
@@ -95,32 +151,12 @@ bash setup.sh clear-proxy --config config/setup.env
 - `apt`
 - shell 环境变量：`http_proxy`、`https_proxy`、`all_proxy`、`no_proxy`
 - `git`
-- `npm`
+- `npm`：仅当系统里已经有 `npm` 时配置
 
 其中：
 
 - `curl`、`wget`、大多数 CLI 会直接读取 shell 里的代理变量
 - `apt` 只支持 HTTP/HTTPS 代理；如果你只有 `socks5://`，通常还需要本地再套一层 HTTP 代理
-
-## Node.js 安装策略
-
-目前默认通过 Debian 官方仓库安装：
-
-```bash
-apt install nodejs npm
-```
-
-优点：
-
-- 最稳定
-- 适合在受限网络中通过 apt 代理统一拉取
-- 维护成本低
-
-缺点：
-
-- 版本通常不是最新
-
-如果你后面想切到 `nvm`、`fnm` 或 NodeSource，可以在这套仓库上继续加一层可选安装逻辑。
 
 ## dotfiles 说明
 
@@ -152,9 +188,6 @@ bash setup.sh install-base --config config/setup.env
 
 # 只安装 shell 环境
 bash setup.sh install-shell --config config/setup.env
-
-# 只安装 Node.js
-bash setup.sh install-node --config config/setup.env
 
 # 只重新链接 dotfiles
 bash setup.sh link-dotfiles --config config/setup.env
