@@ -5,16 +5,13 @@
 目标：
 
 - 可重复执行，不是一次性脚本
-- 代理配置集中管理，方便首次安装和后续修改
+- 通过交互式提问配置，避免维护 `.env`
 - dotfiles 与机器私有配置分离，仓库可直接复用到下一台机器
-- 优先使用 Debian 官方包，减少外部依赖链
 
 ## 仓库结构
 
 ```text
 .
-|-- config/
-|   `-- setup.env.example
 |-- dotfiles/
 |   |-- git/gitconfig
 |   |-- shell/profile
@@ -25,6 +22,25 @@
 ```
 
 ## 全新 Debian 的推荐顺序
+
+### 0. 直接进入菜单
+
+```bash
+bash setup.sh
+```
+
+输入数字选择动作：
+
+- `1` `init`
+- `2` `install-base`
+- `3` `install-shell`
+- `4` `link-dotfiles`
+- `5` `apply-proxy`
+- `6` `clear-proxy`
+- `7` `install-docker`
+- `8` `docker-proxy`
+- `9` `doctor`
+- `10` `exit`
 
 ### 1. 先临时配置 apt 代理
 
@@ -66,151 +82,111 @@ git clone <your-repo-url> ~/debian-env-setup
 cd ~/debian-env-setup
 ```
 
-### 4. 准备本地配置
+### 4. 手动安装你自己的 Node.js / npm
 
-先复制一份本地配置：
-
-```bash
-cp config/setup.env.example config/setup.env
-```
-
-然后按你的网络与账号情况修改 `config/setup.env`。
-
-这个文件默认被 `.gitignore` 忽略，适合放：
-
-- 代理地址
-- 用户名
-- npm registry
-- 是否给用户开 sudo
-- 是否把默认 shell 改成 zsh
-
-### 5. 手动安装你自己的 Node.js / npm
-
-这个仓库现在不负责安装 `nodejs` 和 `npm`，由你自己决定安装方式，比如：
+这个仓库不负责安装 `nodejs` 和 `npm`，由你自己决定安装方式，比如：
 
 - Debian 官方 `apt`
 - `nvm`
 - `fnm`
 - Node 官方 tarball
 
-如果你之后安装好了 `npm`，可以再运行一次：
+安装好 npm 后，可执行 `apply-proxy` 让脚本写入 npm 代理和 registry。
 
-```bash
-bash setup.sh apply-proxy --config config/setup.env
-```
-
-这样脚本会把 npm 代理和 registry 也配置上。
-
-### 6. 首次执行 setup
-
-如果当前用户还没有 sudo，先切 root 执行：
-
-```bash
-su -
-cd /path/to/debian-env-setup
-bash setup.sh init --config config/setup.env
-```
+### 5. 首次执行 setup
 
 如果当前用户已经能 sudo：
 
 ```bash
+sudo bash setup.sh
+```
+
+如果当前用户还没有 sudo，先切 root：
+
+```bash
+su -
 cd /path/to/debian-env-setup
-sudo bash setup.sh init --config config/setup.env
+bash setup.sh
 ```
 
-### 7. 后续只改代理
+执行过程中脚本会逐项询问：
+
+- 目标用户
+- 是否授予 sudo
+- 是否配置代理，以及各工具代理值
+- 是否安装基础包
+- 是否安装 Oh My Zsh / Oh My Tmux
+- 是否切换默认 shell 到 zsh
+
+### 6. 安装 Docker（官方仓库方式）
+
+菜单选 `7`，或直接运行：
 
 ```bash
-bash setup.sh apply-proxy --config config/setup.env
+bash setup.sh install-docker
 ```
 
-### 8. 清理代理
+脚本会按 Docker 官方 Debian 仓库方式安装：
+
+- 添加 Docker apt keyring
+- 配置 Docker 官方 apt repository
+- 安装 `docker-ce`、`docker-ce-cli`、`containerd.io`、`docker-buildx-plugin`、`docker-compose-plugin`
+- 可选把目标用户加入 `docker` 组
+
+### 7. 开启/关闭 Docker 拉镜像代理
+
+菜单选 `8`，或直接运行：
 
 ```bash
-bash setup.sh clear-proxy --config config/setup.env
+bash setup.sh docker-proxy
 ```
 
-## 脚本会做什么
+脚本会交互询问是启用还是关闭代理：
 
-`init` 默认会按配置执行以下步骤：
-
-1. 为目标用户授予 sudo 权限（可选）
-2. 写入 apt 代理配置
-3. 写入 shell 代理环境文件
-4. 配置 git 的 HTTP(S) 代理
-5. 如果系统里已经安装了 npm，则配置 npm 的代理与 registry
-6. 安装基础开发包
-7. 安装 `Oh My Zsh` 与 `Oh My Tmux`
-8. 链接 dotfiles
-9. 可选地把默认 shell 切到 zsh
-
-## 已覆盖的代理配置
-
-当前脚本已经处理：
-
-- `apt`
-- shell 环境变量：`http_proxy`、`https_proxy`、`all_proxy`、`no_proxy`
-- `git`
-- `npm`：仅当系统里已经有 `npm` 时配置
-
-其中：
-
-- `curl`、`wget`、大多数 CLI 会直接读取 shell 里的代理变量
-- `apt` 只支持 HTTP/HTTPS 代理；如果你只有 `socks5://`，通常还需要本地再套一层 HTTP 代理
-
-## dotfiles 说明
-
-脚本会把以下文件链接到目标用户家目录：
-
-- `~/.profile`
-- `~/.zshrc`
-- `~/.gitconfig`
-- `~/.tmux.conf.local`
-
-如果安装了 Oh My Tmux，还会把：
-
-- `~/.tmux.conf -> ~/.tmux/.tmux.conf`
-
-如果目标位置已有同名文件，脚本会先备份为：
-
-```text
-<filename>.bak.<timestamp>
-```
+- 启用时写入 `/etc/systemd/system/docker.service.d/http-proxy.conf`
+- 关闭时删除该文件
+- 最后执行 `systemctl daemon-reload` + `systemctl restart docker`
 
 ## 常用命令
 
 ```bash
-# 全量初始化
-bash setup.sh init --config config/setup.env
+# 菜单模式（推荐）
+bash setup.sh
 
-# 只安装基础软件包
-bash setup.sh install-base --config config/setup.env
+# 全量初始化（交互式）
+bash setup.sh init
 
-# 只安装 shell 环境
-bash setup.sh install-shell --config config/setup.env
+# 只安装基础软件包（交互式）
+bash setup.sh install-base
 
-# 只重新链接 dotfiles
-bash setup.sh link-dotfiles --config config/setup.env
+# 只安装 shell 环境（交互式）
+bash setup.sh install-shell
 
-# 只应用代理
-bash setup.sh apply-proxy --config config/setup.env
+# 只重新链接 dotfiles（交互式）
+bash setup.sh link-dotfiles
 
-# 清理代理配置
-bash setup.sh clear-proxy --config config/setup.env
+# 只应用代理（交互式）
+bash setup.sh apply-proxy
 
-# 查看脚本解析后的关键配置
-bash setup.sh doctor --config config/setup.env
+# 清理代理配置（交互式）
+bash setup.sh clear-proxy
+
+# 安装 Docker（官方 Debian 仓库方式，交互式）
+bash setup.sh install-docker
+
+# 开启/关闭 Docker daemon 代理（交互式）
+bash setup.sh docker-proxy
+
+# 打印当前交互输入结果（不落盘）
+bash setup.sh doctor
+
+# 预演模式（只显示将执行的命令）
+bash setup.sh init --dry-run
 ```
 
-## 建议你确认的扩展项
+## 注意事项
 
-这几个我认为很值得纳入下一版，但先不默认写死：
-
-1. `pnpm` / `yarn` / `corepack` 的代理与镜像
-2. Docker daemon 代理
-3. Git over SSH 的代理方案
-4. 公司或自签 CA 证书导入
-5. `pip` / `uv` / `cargo` 等其他开发工具链代理
-6. Neovim / Vim / VS Code Remote 的基础开发配置
-
-如果你确认要这些，我可以在下一步把它们一起纳入脚本和 dotfiles。
+- `apt` 仅支持 HTTP/HTTPS 代理；`socks5://` 不能直接用于 apt。
+- `npm` 代理仅在系统里已安装 `npm` 时才会写入。
+- Docker 代理配置作用于 Docker daemon（影响 `docker pull`），不是 shell 当前会话代理。
+- dotfiles 会链接到用户 home，若已有同名文件会先备份为 `*.bak.<timestamp>`。

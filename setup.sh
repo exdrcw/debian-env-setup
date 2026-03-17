@@ -5,14 +5,13 @@ set -euo pipefail
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="$SCRIPT_DIR/config/setup.env"
-ACTION="init"
+ACTION=""
 DRY_RUN=0
 
 usage() {
   cat <<'EOF'
 Usage:
-  bash setup.sh <action> [--config path] [--dry-run]
+  bash setup.sh [action] [--dry-run]
 
 Actions:
   init
@@ -21,7 +20,11 @@ Actions:
   link-dotfiles
   apply-proxy
   clear-proxy
+  install-docker
+  docker-proxy
   doctor
+
+If no action is provided, an interactive numbered menu is shown.
 EOF
 }
 
@@ -98,11 +101,6 @@ parse_args() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --config)
-        [[ $# -ge 2 ]] || die "--config requires a path"
-        CONFIG_FILE="$2"
-        shift 2
-        ;;
       --dry-run)
         DRY_RUN=1
         shift
@@ -118,54 +116,227 @@ parse_args() {
   done
 }
 
-load_config() {
-  if [[ -f "$CONFIG_FILE" ]]; then
-    # shellcheck disable=SC1090
-    set +u
-    source "$CONFIG_FILE"
-    set -u
+prompt_string() {
+  local __var_name="$1"
+  local prompt_text="$2"
+  local default_value="$3"
+  local user_input
+
+  if [[ -n "$default_value" ]]; then
+    printf '%s [%s]: ' "$prompt_text" "$default_value"
   else
-    warn "Config file not found: $CONFIG_FILE"
-    warn "Continuing with built-in defaults."
+    printf '%s: ' "$prompt_text"
+  fi
+  read -r user_input
+
+  if [[ -z "$user_input" ]]; then
+    user_input="$default_value"
   fi
 
-  TARGET_USER="${TARGET_USER:-${SUDO_USER:-${USER:-$(id -un)}}}"
-  [[ -n "$TARGET_USER" ]] || die "Unable to determine TARGET_USER"
+  printf -v "$__var_name" '%s' "$user_input"
+}
 
-  TARGET_HOME="${TARGET_HOME:-$(getent passwd "$TARGET_USER" | cut -d: -f6)}"
-  [[ -n "$TARGET_HOME" ]] || die "Unable to determine home directory for $TARGET_USER"
-  TARGET_GROUP="${TARGET_GROUP:-$(id -gn "$TARGET_USER")}"
+prompt_yes_no() {
+  local __var_name="$1"
+  local prompt_text="$2"
+  local default_value="$3"
+  local user_input
 
-  GRANT_SUDO="${GRANT_SUDO:-0}"
-  SUDO_NOPASSWD="${SUDO_NOPASSWD:-0}"
-  INSTALL_BASE_PACKAGES="${INSTALL_BASE_PACKAGES:-1}"
-  INSTALL_SHELL_TOOLS="${INSTALL_SHELL_TOOLS:-1}"
-  CONFIGURE_PROXY="${CONFIGURE_PROXY:-1}"
-  CHANGE_DEFAULT_SHELL_TO_ZSH="${CHANGE_DEFAULT_SHELL_TO_ZSH:-1}"
+  while true; do
+    if [[ "$default_value" -eq 1 ]]; then
+      printf '%s [Y/n]: ' "$prompt_text"
+    else
+      printf '%s [y/N]: ' "$prompt_text"
+    fi
 
-  BASE_PACKAGES_DEFAULT="curl wget git sudo ca-certificates build-essential zsh tmux unzip zip xz-utils gnupg lsb-release jq ripgrep fd-find"
-  BASE_PACKAGES="${BASE_PACKAGES:-$BASE_PACKAGES_DEFAULT}"
+    read -r user_input
+    user_input="${user_input,,}"
 
-  PROXY_URL="${PROXY_URL:-}"
-  HTTP_PROXY="${HTTP_PROXY:-$PROXY_URL}"
-  HTTPS_PROXY="${HTTPS_PROXY:-${PROXY_URL:-}}"
-  ALL_PROXY="${ALL_PROXY:-}"
-  NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,::1,.local}"
+    if [[ -z "$user_input" ]]; then
+      printf -v "$__var_name" '%s' "$default_value"
+      return
+    fi
 
-  APT_HTTP_PROXY="${APT_HTTP_PROXY:-$HTTP_PROXY}"
-  APT_HTTPS_PROXY="${APT_HTTPS_PROXY:-$HTTPS_PROXY}"
-  GIT_HTTP_PROXY="${GIT_HTTP_PROXY:-$HTTP_PROXY}"
-  GIT_HTTPS_PROXY="${GIT_HTTPS_PROXY:-$HTTPS_PROXY}"
-  NPM_PROXY="${NPM_PROXY:-$HTTP_PROXY}"
-  NPM_HTTPS_PROXY="${NPM_HTTPS_PROXY:-$HTTPS_PROXY}"
+    case "$user_input" in
+      y|yes)
+        printf -v "$__var_name" '1'
+        return
+        ;;
+      n|no)
+        printf -v "$__var_name" '0'
+        return
+        ;;
+      *)
+        warn "Please input y or n"
+        ;;
+    esac
+  done
+}
 
-  NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org/}"
-  OH_MY_ZSH_REPO_URL="${OH_MY_ZSH_REPO_URL:-https://github.com/ohmyzsh/ohmyzsh.git}"
-  OH_MY_TMUX_REPO_URL="${OH_MY_TMUX_REPO_URL:-https://github.com/gpakosz/.tmux.git}"
+set_defaults() {
+  TARGET_USER="${SUDO_USER:-${USER:-$(id -un)}}"
+  TARGET_HOME=""
+  TARGET_GROUP=""
+
+  GRANT_SUDO=0
+  SUDO_NOPASSWD=0
+  INSTALL_BASE_PACKAGES=1
+  INSTALL_SHELL_TOOLS=1
+  CONFIGURE_PROXY=1
+  CHANGE_DEFAULT_SHELL_TO_ZSH=1
+
+  BASE_PACKAGES="curl wget git sudo ca-certificates build-essential zsh tmux unzip zip xz-utils gnupg lsb-release jq ripgrep fd-find"
+
+  PROXY_URL=""
+  HTTP_PROXY=""
+  HTTPS_PROXY=""
+  ALL_PROXY=""
+  NO_PROXY="localhost,127.0.0.1,::1,.local"
+
+  APT_HTTP_PROXY=""
+  APT_HTTPS_PROXY=""
+  GIT_HTTP_PROXY=""
+  GIT_HTTPS_PROXY=""
+  NPM_PROXY=""
+  NPM_HTTPS_PROXY=""
+
+  NPM_REGISTRY="https://registry.npmjs.org/"
+  OH_MY_ZSH_REPO_URL="https://github.com/ohmyzsh/ohmyzsh.git"
+  OH_MY_TMUX_REPO_URL="https://github.com/gpakosz/.tmux.git"
+
+  DOCKER_ADD_USER_TO_GROUP=1
+  DOCKER_CONFIGURE_PROXY=0
+  DOCKER_DISABLE_PROXY=0
+  DOCKER_DAEMON_HTTP_PROXY=""
+  DOCKER_DAEMON_HTTPS_PROXY=""
+  DOCKER_DAEMON_NO_PROXY="localhost,127.0.0.1,::1"
+}
+
+resolve_target_user() {
+  TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6 || true)"
+  [[ -n "$TARGET_HOME" ]] || die "User not found: $TARGET_USER"
+  TARGET_GROUP="$(id -gn "$TARGET_USER")"
 
   PROXY_ENV_FILE="$TARGET_HOME/.config/dev-bootstrap/proxy.env"
   OH_MY_ZSH_DIR="$TARGET_HOME/.oh-my-zsh"
   OH_MY_TMUX_DIR="$TARGET_HOME/.tmux"
+}
+
+prompt_target_user() {
+  local default_user="$TARGET_USER"
+  prompt_string TARGET_USER "Target user" "$default_user"
+  resolve_target_user
+}
+
+prompt_proxy_values() {
+  prompt_yes_no CONFIGURE_PROXY "Configure proxy" "$CONFIGURE_PROXY"
+  if [[ "$CONFIGURE_PROXY" -eq 0 ]]; then
+    return
+  fi
+
+  prompt_string PROXY_URL "Proxy URL (HTTP/HTTPS, leave empty to skip)" "$PROXY_URL"
+  HTTP_PROXY="$PROXY_URL"
+  HTTPS_PROXY="$PROXY_URL"
+
+  prompt_string HTTP_PROXY "HTTP proxy" "$HTTP_PROXY"
+  prompt_string HTTPS_PROXY "HTTPS proxy" "$HTTPS_PROXY"
+  prompt_string ALL_PROXY "ALL proxy (optional)" "$ALL_PROXY"
+  prompt_string NO_PROXY "NO_PROXY" "$NO_PROXY"
+
+  prompt_string APT_HTTP_PROXY "APT HTTP proxy" "$HTTP_PROXY"
+  prompt_string APT_HTTPS_PROXY "APT HTTPS proxy" "$HTTPS_PROXY"
+  prompt_string GIT_HTTP_PROXY "Git HTTP proxy" "$HTTP_PROXY"
+  prompt_string GIT_HTTPS_PROXY "Git HTTPS proxy" "$HTTPS_PROXY"
+  prompt_string NPM_PROXY "NPM proxy" "$HTTP_PROXY"
+  prompt_string NPM_HTTPS_PROXY "NPM HTTPS proxy" "$HTTPS_PROXY"
+  prompt_string NPM_REGISTRY "NPM registry" "$NPM_REGISTRY"
+}
+
+prompt_install_options() {
+  prompt_yes_no INSTALL_BASE_PACKAGES "Install base packages" "$INSTALL_BASE_PACKAGES"
+  prompt_yes_no INSTALL_SHELL_TOOLS "Install shell tools (Oh My Zsh / Oh My Tmux)" "$INSTALL_SHELL_TOOLS"
+
+  if [[ "$INSTALL_BASE_PACKAGES" -eq 1 ]]; then
+    prompt_string BASE_PACKAGES "Base packages (space-separated)" "$BASE_PACKAGES"
+  fi
+
+  if [[ "$INSTALL_SHELL_TOOLS" -eq 1 ]]; then
+    prompt_string OH_MY_ZSH_REPO_URL "Oh My Zsh repo" "$OH_MY_ZSH_REPO_URL"
+    prompt_string OH_MY_TMUX_REPO_URL "Oh My Tmux repo" "$OH_MY_TMUX_REPO_URL"
+    prompt_yes_no CHANGE_DEFAULT_SHELL_TO_ZSH "Change default shell to zsh" "$CHANGE_DEFAULT_SHELL_TO_ZSH"
+  fi
+
+  prompt_yes_no GRANT_SUDO "Grant sudo to target user" "$GRANT_SUDO"
+  if [[ "$GRANT_SUDO" -eq 1 ]]; then
+    prompt_yes_no SUDO_NOPASSWD "Create passwordless sudo rule" "$SUDO_NOPASSWD"
+  fi
+}
+
+prompt_docker_install_options() {
+  prompt_yes_no DOCKER_ADD_USER_TO_GROUP "Add target user to docker group" "$DOCKER_ADD_USER_TO_GROUP"
+}
+
+prompt_docker_proxy_options() {
+  prompt_yes_no DOCKER_DISABLE_PROXY "Disable Docker daemon proxy" "$DOCKER_DISABLE_PROXY"
+  if [[ "$DOCKER_DISABLE_PROXY" -eq 1 ]]; then
+    return
+  fi
+
+  DOCKER_CONFIGURE_PROXY=1
+  DOCKER_DAEMON_HTTP_PROXY="$HTTP_PROXY"
+  DOCKER_DAEMON_HTTPS_PROXY="$HTTPS_PROXY"
+  DOCKER_DAEMON_NO_PROXY="$NO_PROXY"
+
+  prompt_string DOCKER_DAEMON_HTTP_PROXY "Docker daemon HTTP proxy" "$DOCKER_DAEMON_HTTP_PROXY"
+  prompt_string DOCKER_DAEMON_HTTPS_PROXY "Docker daemon HTTPS proxy" "$DOCKER_DAEMON_HTTPS_PROXY"
+  prompt_string DOCKER_DAEMON_NO_PROXY "Docker daemon NO_PROXY" "$DOCKER_DAEMON_NO_PROXY"
+}
+
+prompt_for_action() {
+  prompt_target_user
+
+  case "$ACTION" in
+    init)
+      prompt_install_options
+      prompt_proxy_values
+      ;;
+    install-base)
+      INSTALL_BASE_PACKAGES=1
+      prompt_string BASE_PACKAGES "Base packages (space-separated)" "$BASE_PACKAGES"
+      ;;
+    install-shell)
+      INSTALL_SHELL_TOOLS=1
+      prompt_string OH_MY_ZSH_REPO_URL "Oh My Zsh repo" "$OH_MY_ZSH_REPO_URL"
+      prompt_string OH_MY_TMUX_REPO_URL "Oh My Tmux repo" "$OH_MY_TMUX_REPO_URL"
+      prompt_yes_no CHANGE_DEFAULT_SHELL_TO_ZSH "Change default shell to zsh" "$CHANGE_DEFAULT_SHELL_TO_ZSH"
+      ;;
+    link-dotfiles)
+      :
+      ;;
+    apply-proxy)
+      CONFIGURE_PROXY=1
+      prompt_proxy_values
+      ;;
+    clear-proxy)
+      :
+      ;;
+    install-docker)
+      prompt_docker_install_options
+      ;;
+    docker-proxy)
+      prompt_proxy_values
+      prompt_docker_proxy_options
+      ;;
+    doctor)
+      prompt_install_options
+      prompt_proxy_values
+      prompt_docker_install_options
+      prompt_docker_proxy_options
+      ;;
+    *)
+      die "Unknown action: $ACTION"
+      ;;
+  esac
 
   IFS=' ' read -r -a BASE_PACKAGE_ARRAY <<< "$BASE_PACKAGES"
 }
@@ -332,6 +503,67 @@ clear_proxy_config() {
   fi
 }
 
+install_docker_engine() {
+  need_root_or_sudo
+  need_cmd apt
+  need_cmd dpkg
+  need_cmd tee
+
+  log "Installing Docker Engine using Docker's Debian apt repository"
+  as_root apt update
+  as_root apt install -y ca-certificates curl
+  as_root install -m 0755 -d /etc/apt/keyrings
+  as_root curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+  as_root chmod a+r /etc/apt/keyrings/docker.asc
+
+  local codename
+  codename="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
+  [[ -n "$codename" ]] || die "Unable to detect VERSION_CODENAME from /etc/os-release"
+
+  write_file_as_root "/etc/apt/sources.list.d/docker.sources" "Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: ${codename}
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+"
+
+  as_root apt update
+  as_root apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+  if [[ "$DOCKER_ADD_USER_TO_GROUP" -eq 1 ]]; then
+    log "Adding $TARGET_USER to docker group"
+    as_root usermod -aG docker "$TARGET_USER"
+  fi
+
+  log "Docker installation completed"
+}
+
+configure_docker_daemon_proxy() {
+  need_root_or_sudo
+  need_cmd systemctl
+
+  local docker_proxy_conf="/etc/systemd/system/docker.service.d/http-proxy.conf"
+  local docker_proxy_dir="/etc/systemd/system/docker.service.d"
+
+  if [[ "$DOCKER_DISABLE_PROXY" -eq 1 ]]; then
+    log "Disabling Docker daemon proxy"
+    as_root rm -f "$docker_proxy_conf"
+  else
+    [[ -n "$DOCKER_DAEMON_HTTP_PROXY" || -n "$DOCKER_DAEMON_HTTPS_PROXY" ]] || die "Docker daemon proxy is enabled but HTTP/HTTPS proxy is empty"
+    log "Configuring Docker daemon proxy"
+    as_root mkdir -p "$docker_proxy_dir"
+    write_file_as_root "$docker_proxy_conf" "[Service]
+Environment=\"HTTP_PROXY=${DOCKER_DAEMON_HTTP_PROXY}\"
+Environment=\"HTTPS_PROXY=${DOCKER_DAEMON_HTTPS_PROXY}\"
+Environment=\"NO_PROXY=${DOCKER_DAEMON_NO_PROXY}\"
+"
+  fi
+
+  as_root systemctl daemon-reload
+  as_root systemctl restart docker
+  log "Docker daemon proxy change applied"
+}
+
 resolve_available_packages() {
   local available=()
   local pkg
@@ -452,7 +684,6 @@ install_shell_tools() {
 doctor() {
   cat <<EOF
 ACTION=$ACTION
-CONFIG_FILE=$CONFIG_FILE
 TARGET_USER=$TARGET_USER
 TARGET_HOME=$TARGET_HOME
 TARGET_GROUP=$TARGET_GROUP
@@ -462,6 +693,7 @@ INSTALL_BASE_PACKAGES=$INSTALL_BASE_PACKAGES
 INSTALL_SHELL_TOOLS=$INSTALL_SHELL_TOOLS
 CONFIGURE_PROXY=$CONFIGURE_PROXY
 CHANGE_DEFAULT_SHELL_TO_ZSH=$CHANGE_DEFAULT_SHELL_TO_ZSH
+BASE_PACKAGES=$BASE_PACKAGES
 HTTP_PROXY=$HTTP_PROXY
 HTTPS_PROXY=$HTTPS_PROXY
 ALL_PROXY=$ALL_PROXY
@@ -475,6 +707,12 @@ NPM_HTTPS_PROXY=$NPM_HTTPS_PROXY
 NPM_REGISTRY=$NPM_REGISTRY
 OH_MY_ZSH_REPO_URL=$OH_MY_ZSH_REPO_URL
 OH_MY_TMUX_REPO_URL=$OH_MY_TMUX_REPO_URL
+DOCKER_ADD_USER_TO_GROUP=$DOCKER_ADD_USER_TO_GROUP
+DOCKER_CONFIGURE_PROXY=$DOCKER_CONFIGURE_PROXY
+DOCKER_DISABLE_PROXY=$DOCKER_DISABLE_PROXY
+DOCKER_DAEMON_HTTP_PROXY=$DOCKER_DAEMON_HTTP_PROXY
+DOCKER_DAEMON_HTTPS_PROXY=$DOCKER_DAEMON_HTTPS_PROXY
+DOCKER_DAEMON_NO_PROXY=$DOCKER_DAEMON_NO_PROXY
 EOF
 }
 
@@ -492,11 +730,7 @@ run_init() {
   log "Bootstrap completed"
 }
 
-main() {
-  parse_args "$@"
-  load_config
-  ensure_prereqs
-
+execute_action() {
   case "$ACTION" in
     init)
       run_init
@@ -516,6 +750,12 @@ main() {
     clear-proxy)
       clear_proxy_config
       ;;
+    install-docker)
+      install_docker_engine
+      ;;
+    docker-proxy)
+      configure_docker_daemon_proxy
+      ;;
     doctor)
       doctor
       ;;
@@ -524,6 +764,71 @@ main() {
       die "Unknown action: $ACTION"
       ;;
   esac
+}
+
+run_action() {
+  ACTION="$1"
+  set_defaults
+  ensure_prereqs
+  prompt_for_action
+  execute_action
+}
+
+print_menu() {
+  cat <<'EOF'
+
+======== Setup Menu ========
+1) init
+2) install-base
+3) install-shell
+4) link-dotfiles
+5) apply-proxy
+6) clear-proxy
+7) install-docker
+8) docker-proxy
+9) doctor
+10) exit
+============================
+EOF
+}
+
+run_menu_loop() {
+  local choice
+  [[ -t 0 ]] || die "Interactive menu requires a TTY. Use an action argument instead."
+
+  while true; do
+    print_menu
+    printf 'Select an option [1-10]: '
+    read -r choice
+
+    case "$choice" in
+      1) run_action "init" ;;
+      2) run_action "install-base" ;;
+      3) run_action "install-shell" ;;
+      4) run_action "link-dotfiles" ;;
+      5) run_action "apply-proxy" ;;
+      6) run_action "clear-proxy" ;;
+      7) run_action "install-docker" ;;
+      8) run_action "docker-proxy" ;;
+      9) run_action "doctor" ;;
+      10|q|Q|exit|quit)
+        log "Exiting."
+        return 0
+        ;;
+      *)
+        warn "Invalid option: $choice"
+        ;;
+    esac
+  done
+}
+
+main() {
+  parse_args "$@"
+  if [[ -z "$ACTION" ]]; then
+    run_menu_loop
+  else
+    run_action "$ACTION"
+  fi
 }
 
 main "$@"
